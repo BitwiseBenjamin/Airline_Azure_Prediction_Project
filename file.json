@@ -1,0 +1,195 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# ✈️ Flight Delay Prediction using Azure SQL + Azure ML\n",
+    "This notebook:\n",
+    "1. Connects to **Azure SQL Database**\n",
+    "2. Loads flight statistics data\n",
+    "3. Builds a **delay probability dataset**\n",
+    "4. Trains a classifier to predict probability of flight delay\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import pandas as pd\n",
+    "import sqlalchemy\n",
+    "import pyodbc\n",
+    "\n",
+    "# -------------------------\n",
+    "# Azure SQL connection info\n",
+    "# -------------------------\n",
+    "server = \"YOUR_SERVER.database.windows.net\"\n",
+    "database = \"YOUR_DATABASE\"\n",
+    "username = \"YOUR_USERNAME\"\n",
+    "password = \"YOUR_PASSWORD\"\n",
+    "\n",
+    "connection_string = f\"mssql+pyodbc://{username}:{password}@{server}/{database}?driver=ODBC+Driver+18+for+SQL+Server\"\n",
+    "engine = sqlalchemy.create_engine(connection_string)\n",
+    "\n",
+    "query = \"SELECT year, month, carrier, airport, arr_flights, arr_del15 FROM YOUR_TABLE_NAME\" \n",
+    "df = pd.read_sql(query, engine)\n",
+    "\n",
+    "df.head()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 🧮 Compute Delay Probability\n",
+    "`delay_probability = arr_del15 / arr_flights`\n",
+    "\n",
+    "We'll build a dataset using only your selected columns:\n",
+    "- **month**\n",
+    "- **carrier**\n",
+    "- **airport**\n",
+    "- **arr_flights**\n",
+    "- **arr_del15**\n",
+    "- **delay_probability** (target)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "df = df[df['arr_flights'] > 0]\n",
+    "df['delay_probability'] = df['arr_del15'] / df['arr_flights']\n",
+    "\n",
+    "df.head()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 🔤 Encode Categories\n",
+    "We convert categorical values (**carrier**, **airport**) to numbers using one-hot encoding."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "from sklearn.model_selection import train_test_split\n",
+    "from sklearn.preprocessing import OneHotEncoder\n",
+    "from sklearn.compose import ColumnTransformer\n",
+    "from sklearn.pipeline import Pipeline\n",
+    "from sklearn.ensemble import RandomForestRegressor\n",
+    "from sklearn.metrics import mean_absolute_error\n",
+    "\n",
+    "# features and target\n",
+    "X = df[['month', 'carrier', 'airport', 'arr_flights']]\n",
+    "y = df['delay_probability']\n",
+    "\n",
+    "# preprocessing\n",
+    "categorical_features = ['carrier', 'airport']\n",
+    "numeric_features = ['month', 'arr_flights']\n",
+    "\n",
+    "preprocess = ColumnTransformer(\n",
+    "    transformers=[\n",
+    "        ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features),\n",
+    "        ('num', 'passthrough', numeric_features)\n",
+    "    ]\n",
+    ")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 🤖 Train Model\n",
+    "We use a **RandomForestRegressor** to predict probability (0–1)."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# full pipeline\n",
+    "model = Pipeline([\n",
+    "    ('preprocess', preprocess),\n",
+    "    ('rf', RandomForestRegressor(n_estimators=200, random_state=42))\n",
+    "])\n",
+    "\n",
+    "X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)\n",
+    "\n",
+    "model.fit(X_train, y_train)\n",
+    "preds = model.predict(X_test)\n",
+    "\n",
+    "mae = mean_absolute_error(y_test, preds)\n",
+    "mae"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 📊 Predict Delay Probability for a Single Flight"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "example = pd.DataFrame([\n",
+    "    {\n",
+    "        'month': 7,\n",
+    "        'carrier': 'AA',\n",
+    "        'airport': 'DFW',\n",
+    "        'arr_flights': 1200\n",
+    "    }\n",
+    "])\n",
+    "\n",
+    "pred = model.predict(example)[0]\n",
+    "print(f\"Predicted delay probability: {pred:.2%}\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 💾 Save Model for Azure ML\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import joblib\n",
+    "\n",
+    "joblib.dump(model, \"flight_delay_model.pkl\")\n",
+    "print(\"Model saved as flight_delay_model.pkl\")"
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "name": "python",
+   "version": "3.8"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 2
+}
